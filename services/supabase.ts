@@ -1,27 +1,23 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// Folosim variabilele de mediu din Vercel
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || '';
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn("Atenție: SUPABASE_URL sau SUPABASE_ANON_KEY nu sunt configurate în Environment Variables.");
-}
+// Coordonate furnizate pentru integrarea completă
+const supabaseUrl = 'https://tnttlfbrzndbjjrvdgbf.supabase.co';
+const supabaseAnonKey = 'sb_publishable_Kxk_efqx1-foSZ_yMorH7A_6XNSnAvp';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+/**
+ * Salvează sau actualizează conversația zilei curente.
+ * Tabela 'daily_conversations' trebuie să aibă coloana 'conversation_date' setată ca UNIQUE.
+ */
 export async function saveConversation(content: string) {
   if (!content) return;
-  if (!supabaseUrl || !supabaseAnonKey) {
-    console.error("Nu se poate salva: Configurația Supabase lipsește.");
-    return;
-  }
 
   const today = new Date().toISOString().split('T')[0];
 
   try {
-    console.log(`Încercare salvare conversație pentru data: ${today}`);
+    console.log(`Gigi încearcă să salveze amintirile pentru data: ${today}...`);
     
     const { data, error } = await supabase
       .from('daily_conversations')
@@ -36,16 +32,14 @@ export async function saveConversation(content: string) {
       .select();
 
     if (error) {
-      console.error('Eroare detaliată Supabase:', error.message, error.details, error.hint);
-      // Dacă eroarea este 404, probabil tabela nu există
-      if (error.code === 'PGRST116' || error.message.includes('not found')) {
-        console.error('Sfat: Verifică dacă tabela "daily_conversations" a fost creată în Supabase SQL Editor.');
-      }
+      console.error('Eroare la salvarea în Supabase:', error.message);
+      // Notă: Dacă primești eroare 404 sau "relation not found", 
+      // asigură-te că ai creat tabela daily_conversations în dashboard-ul Supabase.
       throw error;
     }
     
-    console.log('Conversație salvată cu succes în Supabase:', data);
+    console.log('Conversație salvată cu succes.');
   } catch (err) {
-    console.error('Excepție critică la salvarea în bază de date:', err);
+    console.error('Eroare critică la serviciul de salvare:', err);
   }
 }
