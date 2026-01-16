@@ -3,7 +3,7 @@
 <html lang="ro">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Gigi - Companion Grijuliu</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,15 +13,26 @@
       body {
         font-family: 'Outfit', sans-serif;
         background-color: #f8fafc;
-        overflow: hidden;
+        /* Previne pull-to-refresh pe mobil care ar închide conexiunea */
+        overscroll-behavior-y: contain;
+        -webkit-tap-highlight-color: transparent;
       }
       .senior-text {
-        font-size: 2.25rem; /* ~36px for extreme readability */
-        line-height: 1.4;
+        font-size: 1.8rem; /* Puțin mai mic pe mobil pentru a nu umple tot ecranul */
+        line-height: 1.3;
       }
-      /* Stiluri pentru scrollbar discret */
+      @media (min-width: 768px) {
+        .senior-text {
+          font-size: 2.25rem;
+        }
+      }
+      /* Fix pentru înălțimea ecranului pe mobil */
+      .h-safe-screen {
+        height: 100vh;
+        height: 100dvh;
+      }
       ::-webkit-scrollbar {
-        width: 8px;
+        width: 6px;
       }
       ::-webkit-scrollbar-track {
         background: #f1f5f9;
