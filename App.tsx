@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from '@google/genai';
 import { ConnectionStatus, TranscriptionPart } from './types';
 import { decode, decodeAudioData, createPcmBlob } from './services/audioUtils';
@@ -26,7 +26,6 @@ const App: React.FC = () => {
   const streamRef = useRef<MediaStream | null>(null);
   const transcriptionBufferRef = useRef({ user: '', model: '' });
 
-  // Cleanup helper
   const disconnect = useCallback(() => {
     if (sessionRef.current) {
       sessionRef.current.close();
@@ -48,9 +47,14 @@ const App: React.FC = () => {
     try {
       setStatus(ConnectionStatus.CONNECTING);
       
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+      // Verificăm dacă cheia există înainte de inițializare
+      const apiKey = process.env.API_KEY;
+      if (!apiKey) {
+        throw new Error("Cheia API lipsește. Asigură-te că variabila se numește exact API_KEY în Vercel.");
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
       
-      // Initialize Audio Contexts
       audioContextInRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       audioContextOutRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       
@@ -73,7 +77,6 @@ const App: React.FC = () => {
             setStatus(ConnectionStatus.CONNECTED);
             setIsListening(true);
             
-            // Microphone streaming
             const source = audioContextInRef.current!.createMediaStreamSource(stream);
             const scriptProcessor = audioContextInRef.current!.createScriptProcessor(4096, 1, 1);
             
@@ -89,7 +92,6 @@ const App: React.FC = () => {
             scriptProcessor.connect(audioContextInRef.current!.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
-            // Handle Transcriptions
             if (message.serverContent?.inputTranscription) {
               transcriptionBufferRef.current.user += message.serverContent.inputTranscription.text;
             }
@@ -110,7 +112,6 @@ const App: React.FC = () => {
               transcriptionBufferRef.current = { user: '', model: '' };
             }
 
-            // Handle Audio Playback
             const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (audioData && audioContextOutRef.current) {
               setIsSpeaking(true);
@@ -134,7 +135,6 @@ const App: React.FC = () => {
               activeSourcesRef.current.add(source);
             }
 
-            // Handle Interruptions
             if (message.serverContent?.interrupted) {
               activeSourcesRef.current.forEach(s => s.stop());
               activeSourcesRef.current.clear();
@@ -143,7 +143,7 @@ const App: React.FC = () => {
             }
           },
           onerror: (e) => {
-            console.error('Gigi encountered an error:', e);
+            console.error('Gigi error:', e);
             setStatus(ConnectionStatus.ERROR);
           },
           onclose: () => {
@@ -155,14 +155,13 @@ const App: React.FC = () => {
       sessionRef.current = await sessionPromise;
       
     } catch (err) {
-      console.error('Failed to connect to Gigi:', err);
+      console.error('Failed to connect:', err);
       setStatus(ConnectionStatus.ERROR);
     }
   };
 
   return (
     <div className="min-h-screen flex flex-col items-center bg-indigo-50/30 p-4 md:p-8">
-      {/* Header */}
       <header className="w-full max-w-4xl flex justify-between items-center mb-8">
         <div>
           <h1 className="text-4xl font-bold text-indigo-900">Gigi</h1>
@@ -173,12 +172,11 @@ const App: React.FC = () => {
             onClick={disconnect}
             className="px-6 py-3 bg-white text-red-500 border-2 border-red-100 rounded-2xl font-semibold hover:bg-red-50 transition-colors shadow-sm"
           >
-            Închide Conversația
+            Închide
           </button>
         )}
       </header>
 
-      {/* Main Experience */}
       <main className="flex-1 w-full max-w-4xl flex flex-col items-center justify-center">
         {status === ConnectionStatus.IDLE || status === ConnectionStatus.ERROR ? (
           <div className="text-center animate-in fade-in zoom-in duration-700">
@@ -189,52 +187,37 @@ const App: React.FC = () => {
               </svg>
             </div>
             <h2 className="text-5xl font-bold text-indigo-900 mb-6">Bună ziua, Tanti Marioara!</h2>
-            <p className="text-2xl text-indigo-700 mb-12 max-w-lg mx-auto leading-relaxed">
-              Apăsați pe butonul mare de mai jos pentru a începe să stăm de vorbă. Mi-a fost dor de dumneavoastră!
-            </p>
             <button 
               onClick={connectToGigi}
               className="px-16 py-8 bg-indigo-600 text-white text-3xl font-bold rounded-full shadow-2xl hover:bg-indigo-700 transform hover:-translate-y-1 transition-all active:scale-95"
             >
-              Începe Să Vorbești cu Gigi
+              Începe să vorbim
             </button>
             {status === ConnectionStatus.ERROR && (
               <p className="mt-6 text-red-500 font-semibold text-xl">
-                Ceva n-a mers bine. Vă rugăm să mai încercați o dată.
+                A apărut o eroare. Verifică setările API_KEY în Vercel.
               </p>
             )}
           </div>
         ) : status === ConnectionStatus.CONNECTING ? (
           <div className="text-center">
             <div className="w-32 h-32 border-8 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto mb-8"></div>
-            <p className="text-3xl text-indigo-800 font-medium">Gigi vine imediat la telefon...</p>
+            <p className="text-3xl text-indigo-800 font-medium">Gigi se pregătește...</p>
           </div>
         ) : (
           <>
-            <GigiAvatar 
-              isSpeaking={isSpeaking} 
-              isListening={isListening} 
-              status={status} 
-            />
+            <GigiAvatar isSpeaking={isSpeaking} isListening={isListening} status={status} />
             <TranscriptionView items={transcription} />
-            
             <div className="mt-8 text-indigo-400 font-medium text-xl flex items-center gap-2">
               <span className="relative flex h-3 w-3">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
               </span>
-              Conexiune securizată și privată
+              Conexiune securizată
             </div>
           </>
         )}
       </main>
-
-      {/* Footer Info for Seniors */}
-      <footer className="mt-8 text-center text-indigo-300 max-w-lg">
-        <p className="text-lg">
-          Gigi este asistentul dumneavoastră personal. Conversația este salvată în siguranță pentru a ne asigura că vă oferim cea mai bună îngrijire.
-        </p>
-      </footer>
     </div>
   );
 };
