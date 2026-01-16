@@ -83,13 +83,7 @@ const App: React.FC = () => {
     try {
       setStatus(ConnectionStatus.CONNECTING);
       
-      // Obtain API key exclusively from process.env.API_KEY as per guidelines
-      const apiKey = process.env.API_KEY;
-      if (!apiKey) {
-        throw new Error("API_KEY lipsește.");
-      }
-
-      // Initialize GoogleGenAI right before making the API call
+      // Initialize GoogleGenAI directly with process.env.API_KEY as per guidelines
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
       audioContextInRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -101,7 +95,6 @@ const App: React.FC = () => {
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
-          // Fixed typo: responseModalities instead of responseModalalities
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
@@ -121,9 +114,9 @@ const App: React.FC = () => {
             scriptProcessor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
               const pcmBlob = createPcmBlob(inputData);
-              // Ensure data is sent only after session resolves
+              // Solely rely on sessionPromise resolves without extra condition checks
               sessionPromise.then(session => {
-                if (session) session.sendRealtimeInput({ media: pcmBlob });
+                session.sendRealtimeInput({ media: pcmBlob });
               });
             };
             
@@ -184,11 +177,11 @@ const App: React.FC = () => {
               setIsSpeaking(false);
             }
           },
-          onerror: (e) => {
+          onerror: (e: ErrorEvent) => {
             console.error('Gigi error:', e);
             setStatus(ConnectionStatus.ERROR);
           },
-          onclose: () => {
+          onclose: (e: CloseEvent) => {
             disconnect();
           }
         }
@@ -266,7 +259,7 @@ const App: React.FC = () => {
                   Problemă la conexiune.
                 </p>
                 <p className="text-red-500 text-lg mt-2">
-                  Asigură-te că API_KEY este configurată corect în variabilele de mediu.
+                  Vă rugăm să reîncercați mai târziu.
                 </p>
               </div>
             )}

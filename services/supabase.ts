@@ -1,15 +1,36 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-/**
- * NOTĂ: Folosim process.env pentru a accesa variabilele setate în Vercel/Vite.
- * Utilizăm prefixul VITE_ conform cerințelor mediului de execuție.
- */
-const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+// Folosim o abordare sigură pentru a accesa variabilele de mediu
+// În unele medii (Vite), acestea pot fi în import.meta.env, în altele în process.env
+const getEnv = (key: string): string | undefined => {
+  let value: string | undefined;
+  
+  try {
+    // Încercăm process.env (standard Node/CJS/Vercel)
+    // @ts-ignore
+    if (typeof process !== 'undefined' && process.env) {
+      value = process.env[key];
+    }
+    
+    // Dacă nu am găsit, încercăm import.meta.env (standard Vite/ESM)
+    // Am adăugat cast la any pentru a evita eroarea TS: Property 'env' does not exist on type 'ImportMeta'
+    // @ts-ignore
+    if (!value && typeof import.meta !== 'undefined' && (import.meta as any).env) {
+      value = (import.meta as any).env[key];
+    }
+  } catch (e) {
+    console.debug(`Nu s-a putut accesa variabila ${key}:`, e);
+  }
+  
+  return value;
+};
 
-// Verificăm dacă avem ambele valori necesare și dacă cheia are formatul JWT (începe cu eyJ)
-const isConfigured = !!supabaseUrl && !!supabaseAnonKey && supabaseAnonKey.startsWith('eyJ');
+const supabaseUrl = getEnv('VITE_SUPABASE_URL');
+const supabaseAnonKey = getEnv('VITE_SUPABASE_ANON_KEY');
+
+// Verificăm dacă avem valorile necesare pentru inițializare
+const isConfigured = !!supabaseUrl && !!supabaseAnonKey;
 
 export const supabase = isConfigured 
   ? createClient(supabaseUrl, supabaseAnonKey)
@@ -22,7 +43,7 @@ export async function saveConversation(content: string) {
   if (!content) return;
   
   if (!supabase) {
-    console.warn("⚠️ SUPABASE: Configurare incompletă. Verifică variabilele VITE_SUPABASE_URL și VITE_SUPABASE_ANON_KEY.");
+    console.warn("⚠️ SUPABASE: Configurare incompletă. Verifică variabilele VITE_SUPABASE_URL și VITE_SUPABASE_ANON_KEY în setările proiectului.");
     return;
   }
 
