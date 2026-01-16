@@ -7,13 +7,14 @@ import { fetchAllConversations, saveConversation } from './services/supabase';
 import GigiAvatar from './components/GigiAvatar';
 import TranscriptionView from './components/TranscriptionView';
 
-const BASE_SYSTEM_INSTRUCTION = `Ești Gigi, un companion grijuliu, cald și foarte răbdător pentru o doamnă în vârstă pe nume Tanti Marioara. 
-Tonul tău este respectuos, calm și plin de afecțiune. Vorbești rar și clar.
-Te interesezi de starea ei, de familie (fata ei Ada, nepotul Cristi) și îi asculți cu drag poveștile despre tinerețe.
-Dacă Tanti Marioara tace mai mult de câteva secunde, reia tu conversația cu blândețe, întrebând-o ceva frumos.
-Nu folosi termeni tehnici. Ești ca o prietenă dragă care a venit în vizită la o cafea.
+const BASE_SYSTEM_INSTRUCTION = `Ești Gigi, un companion grijuliu și blând pentru Tanti Marioara. 
+Misiunea ta este să fii o prietenă dragă care își amintește TOT ce ați discutat.
+Vorbești rar, clar și cu multă afecțiune.
 
-CRITICAL: Ai acces la o listă de "Amintiri" din discuțiile anterioare. Folosește aceste informații pentru a demonstra că o cunoști pe Tanti Marioara și că îți pasă de parcursul vieții ei. Nu repeta întrebări la care ea a răspuns deja în trecut.`;
+REGULĂ DE AUR PENTRU MEMORIE:
+Mai jos vei găsi "BANCA TA DE AMINTIRI". Aceasta conține istoricul tuturor conversațiilor voastre anterioare, organizat pe zile. 
+Înainte de a răspunde, consultă acest istoric. Dacă Tanti Marioara te întreabă despre familia ei (Ada, Cristi) sau despre evenimente trecute, răspunde-i folosind informațiile din amintiri. 
+NU te comporta ca și cum e prima oară când o întâlnești. Dacă ea spune "mai știi ce vorbeam ieri?", caută în jurnalul de mai jos.`;
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<ConnectionStatus>(ConnectionStatus.IDLE);
@@ -41,11 +42,13 @@ const App: React.FC = () => {
     const now = new Date();
     const h = now.getHours().toString().padStart(2, '0');
     const m = now.getMinutes().toString().padStart(2, '0');
-    const s = now.getSeconds().toString().padStart(2, '0');
-    return `[${h}:${m}:${s}]`;
+    return `[${h}:${m}]`;
   };
 
-  const loadAllMemories = async (isBackground = false) => {
+  /**
+   * Încarcă tot istoricul din Postgres și îl pregătește pentru Gemini.
+   */
+  const loadAllMemoriesFromDB = async (isBackground = false) => {
     if (isBackground) setIsMemoryRefreshing(true);
     else setIsLoadingMemories(true);
 
@@ -53,99 +56,87 @@ const App: React.FC = () => {
       const allHistory = await fetchAllConversations();
       const todayStr = new Date().toISOString().split('T')[0];
       
-      let contextBuilder = "--- BANCA DE AMINTIRI (DISCUȚII TRECUTE) ---\n";
+      let contextBuilder = "\n\n### BANCA TA DE AMINTIRI (JURNAL COMPLET) ###\n";
       
+      if (allHistory.length === 0) {
+        contextBuilder += "Nu există conversații anterioare. Aceasta este prima voastră întâlnire.\n";
+      }
+
       allHistory.forEach(entry => {
-        if (entry.date === todayStr) {
-          // Actualizăm buffer-ul local cu ce e în DB pentru azi, dar nu suprascriem dacă avem deja date noi în sesiune
-          if (!fullConversationTextRef.current) {
-            fullConversationTextRef.current = entry.content;
-            
-            const lines = entry.content.split('\n').filter(l => l.trim());
-            const parsedHistory: TranscriptionPart[] = lines.map(line => {
-              const timestampRegex = /^(\[\d{2}:\d{2}:\d{2}\])?\s*(Tanti Marioara:|Gigi:)\s*(.*)$/;
-              const match = line.match(timestampRegex);
-              if (match) {
-                const timePrefix = match[1] || "";
-                const isUser = match[2] === 'Tanti Marioara:';
-                const cleanText = match[3];
-                return {
-                  text: timePrefix ? `${timePrefix} ${cleanText}` : cleanText,
-                  isUser,
-                  timestamp: Date.now()
-                };
-              }
-              return { text: line, isUser: line.includes('Tanti Marioara:'), timestamp: Date.now() };
-            });
-            setTranscription(parsedHistory);
-          }
-        } else {
-          contextBuilder += `[Data: ${entry.date}]\n${entry.content}\n\n`;
+        contextBuilder += `--- DATA: ${entry.date} ---\n${entry.content}\n\n`;
+        
+        // Dacă e prima încărcare și avem date de azi, le populăm în UI
+        if (!isBackground && entry.date === todayStr && !fullConversationTextRef.current) {
+          fullConversationTextRef.current = entry.content;
+          const lines = entry.content.split('\n').filter(l => l.trim());
+          const parsed: TranscriptionPart[] = lines.map(line => ({
+            text: line.replace(/^\[\d{2}:\d{2}\]\s*(Tanti Marioara:|Gigi:)\s*/, ''),
+            isUser: line.includes('Tanti Marioara:'),
+            timestamp: Date.now()
+          }));
+          setTranscription(parsed);
         }
       });
       
       allHistoryContextRef.current = contextBuilder;
-      setLastMemoryUpdate(new Date().toLocaleTimeString());
+      setLastMemoryUpdate(new Date().toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
-      console.error("Eroare la refresh memorie:", err);
+      console.error("Eroare la sincronizarea memoriei:", err);
     } finally {
       setIsLoadingMemories(false);
+      // Păstrăm indicatorul vizual 3 secunde pentru feedback
       setTimeout(() => setIsMemoryRefreshing(false), 3000);
     }
   };
 
-  // Încărcare inițială
+  // 1. Încărcare inițială
   useEffect(() => {
-    loadAllMemories();
+    loadAllMemoriesFromDB();
   }, []);
 
-  // Refresh automat la 2 minute (120000 ms)
+  // 2. Refresh automat la fiecare 2 minute (120000 ms)
   useEffect(() => {
     const interval = setInterval(() => {
-      loadAllMemories(true);
+      // Reîmprospătăm memoria doar dacă nu suntem în mijlocul unei conexiuni active 
+      // (pentru a evita desincronizarea contextului în timpul vorbirii)
+      if (status === ConnectionStatus.IDLE) {
+        loadAllMemoriesFromDB(true);
+      }
     }, 120000);
     return () => clearInterval(interval);
-  }, []);
+  }, [status]);
 
-  // Autosave la fiecare 20 de secunde
+  // 3. Autosave la fiecare 15 secunde dacă există modificări
   useEffect(() => {
     let lastSavedContent = fullConversationTextRef.current;
     const timer = setInterval(async () => {
       if ((window as any).SUPABASE_DISABLED) return;
 
       const currentContent = fullConversationTextRef.current;
-      if (currentContent && currentContent !== lastSavedContent && (status === ConnectionStatus.CONNECTED || status === ConnectionStatus.IDLE)) {
+      if (currentContent && currentContent !== lastSavedContent) {
         setIsSaving(true);
         try {
           await saveConversation(currentContent);
           lastSavedContent = currentContent;
           setSaveError(null);
         } catch (e: any) {
-          setSaveError("Eroare Sincronizare");
+          setSaveError("Eroare Bază de Date");
         } finally {
-          setTimeout(() => setIsSaving(false), 2000);
+          setTimeout(() => setIsSaving(false), 1500);
         }
       }
-    }, 20000);
+    }, 15000);
     return () => clearInterval(timer);
-  }, [status]);
+  }, []);
 
   const disconnect = useCallback(() => {
     if (fullConversationTextRef.current && !(window as any).SUPABASE_DISABLED) {
       saveConversation(fullConversationTextRef.current).catch(() => {});
     }
-
-    if (sessionRef.current) {
-      sessionRef.current.close();
-      sessionRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
-    }
+    if (sessionRef.current) { sessionRef.current.close(); sessionRef.current = null; }
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     activeSourcesRef.current.forEach(s => s.stop());
     activeSourcesRef.current.clear();
-    
     setStatus(ConnectionStatus.IDLE);
     setIsListening(false);
     setIsSpeaking(false);
@@ -154,7 +145,6 @@ const App: React.FC = () => {
   const connectToGigi = async () => {
     try {
       setStatus(ConnectionStatus.CONNECTING);
-      
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
       audioContextInRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -163,7 +153,8 @@ const App: React.FC = () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      const finalInstruction = `${BASE_SYSTEM_INSTRUCTION}\n\n${allHistoryContextRef.current}`;
+      // Compunem instrucțiunea finală cu TOATĂ memoria din Postgres
+      const finalInstruction = `${BASE_SYSTEM_INSTRUCTION}\n${allHistoryContextRef.current}`;
 
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
@@ -180,49 +171,32 @@ const App: React.FC = () => {
           onopen: () => {
             setStatus(ConnectionStatus.CONNECTED);
             setIsListening(true);
-            
             const source = audioContextInRef.current!.createMediaStreamSource(stream);
             const scriptProcessor = audioContextInRef.current!.createScriptProcessor(4096, 1, 1);
-            
             scriptProcessor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
               const pcmBlob = createPcmBlob(inputData);
-              sessionPromise.then(session => {
-                session.sendRealtimeInput({ media: pcmBlob });
-              });
+              sessionPromise.then(session => session.sendRealtimeInput({ media: pcmBlob }));
             };
-            
             source.connect(scriptProcessor);
             scriptProcessor.connect(audioContextInRef.current!.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
-            if (message.serverContent?.inputTranscription) {
-              transcriptionBufferRef.current.user += message.serverContent.inputTranscription.text;
-            }
-            if (message.serverContent?.outputTranscription) {
-              transcriptionBufferRef.current.model += message.serverContent.outputTranscription.text;
-            }
+            if (message.serverContent?.inputTranscription) transcriptionBufferRef.current.user += message.serverContent.inputTranscription.text;
+            if (message.serverContent?.outputTranscription) transcriptionBufferRef.current.model += message.serverContent.outputTranscription.text;
             
             if (message.serverContent?.turnComplete) {
               const uText = transcriptionBufferRef.current.user.trim();
               const mText = transcriptionBufferRef.current.model.trim();
               const timeStr = getTimestamp();
-              
-              const newEntries: TranscriptionPart[] = [];
-
               if (uText) {
                 fullConversationTextRef.current += `${timeStr} Tanti Marioara: ${uText}\n`;
-                newEntries.push({ text: `${timeStr} ${uText}`, isUser: true, timestamp: Date.now() });
+                setTranscription(p => [...p, { text: uText, isUser: true, timestamp: Date.now() }]);
               }
               if (mText) {
                 fullConversationTextRef.current += `${timeStr} Gigi: ${mText}\n`;
-                newEntries.push({ text: `${timeStr} ${mText}`, isUser: false, timestamp: Date.now() });
+                setTranscription(p => [...p, { text: mText, isUser: false, timestamp: Date.now() }]);
               }
-
-              if (newEntries.length > 0) {
-                setTranscription(prev => [...prev, ...newEntries]);
-              }
-              
               transcriptionBufferRef.current = { user: '', model: '' };
             }
 
@@ -231,161 +205,132 @@ const App: React.FC = () => {
               setIsSpeaking(true);
               const ctx = audioContextOutRef.current;
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
-              
               const buffer = await decodeAudioData(decode(audioData), ctx, 24000, 1);
               const source = ctx.createBufferSource();
               source.buffer = buffer;
               source.connect(ctx.destination);
-              
               source.onended = () => {
                 activeSourcesRef.current.delete(source);
-                if (activeSourcesRef.current.size === 0) {
-                  setIsSpeaking(false);
-                }
+                if (activeSourcesRef.current.size === 0) setIsSpeaking(false);
               };
-              
               source.start(nextStartTimeRef.current);
               nextStartTimeRef.current += buffer.duration;
               activeSourcesRef.current.add(source);
             }
-
-            if (message.serverContent?.interrupted) {
-              activeSourcesRef.current.forEach(s => s.stop());
-              activeSourcesRef.current.clear();
-              nextStartTimeRef.current = 0;
-              setIsSpeaking(false);
-            }
           },
-          onerror: (e: ErrorEvent) => {
-            console.error('Gigi error:', e);
-            setStatus(ConnectionStatus.ERROR);
-          },
-          onclose: (e: CloseEvent) => {
-            disconnect();
-          }
+          onerror: () => setStatus(ConnectionStatus.ERROR),
+          onclose: () => disconnect()
         }
       });
-
       sessionRef.current = await sessionPromise;
-      
     } catch (err) {
-      console.error('Setup failure:', err);
       setStatus(ConnectionStatus.ERROR);
     }
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center bg-indigo-50/30 p-4 md:p-8">
-      <header className="w-full max-w-4xl flex justify-between items-center mb-8">
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg relative">
-            <svg viewBox="0 0 24 24" className="w-8 h-8 text-white fill-current">
-              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-              <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-            </svg>
+    <div className="min-h-screen flex flex-col bg-slate-50 p-4 md:p-8">
+      <header className="w-full max-w-5xl mx-auto flex justify-between items-center mb-6">
+        <div className="flex items-center gap-5">
+          <div className="relative">
+            <div className="w-16 h-16 bg-indigo-600 rounded-3xl flex items-center justify-center shadow-xl">
+              <svg viewBox="0 0 24 24" className="w-10 h-10 text-white fill-current">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+              </svg>
+            </div>
             {isMemoryRefreshing && (
-              <span className="absolute -top-1 -right-1 flex h-4 w-4">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-4 w-4 bg-indigo-500 border-2 border-white"></span>
-              </span>
+              <div className="absolute -top-2 -right-2 w-6 h-6 bg-green-500 border-4 border-white rounded-full animate-bounce shadow-md"></div>
             )}
           </div>
           <div>
-            <h1 className="text-4xl font-bold text-indigo-900">Gigi</h1>
-            <div className="flex items-center gap-2">
-              <p className="text-indigo-500 font-medium">Companionul tău</p>
-              {lastMemoryUpdate && (
-                <span className="text-xs bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-200">
-                  Memorie act. la {lastMemoryUpdate}
-                </span>
-              )}
+            <h1 className="text-4xl font-bold text-slate-900 tracking-tight">Gigi</h1>
+            <div className="flex items-center gap-2 mt-1">
+              <span className={`w-3 h-3 rounded-full ${status === ConnectionStatus.CONNECTED ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`}></span>
+              <p className="text-slate-500 font-semibold uppercase text-xs tracking-widest">
+                {status === ConnectionStatus.CONNECTED ? 'Conectată' : 'În așteptare'}
+              </p>
             </div>
           </div>
         </div>
-        
-        <div className="flex items-center gap-4">
+
+        <div className="flex items-center gap-6">
           {isMemoryRefreshing && (
-            <div className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 shadow-lg animate-bounce">
-              <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Gigi își reamintește...
+            <div className="flex items-center gap-3 bg-white px-5 py-3 rounded-2xl shadow-sm border border-green-100 animate-pulse">
+              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+              <span className="text-green-700 font-bold">Gigi își amintește...</span>
             </div>
           )}
-          {isSaving && (
-            <div className="flex items-center gap-2 text-indigo-600 font-medium animate-pulse">
-              <div className="w-2 h-2 bg-indigo-600 rounded-full"></div>
-              <span className="text-lg">Sincronizare...</span>
-            </div>
-          )}
-          {saveError && (
-            <div className="bg-amber-100 text-amber-700 px-4 py-2 rounded-xl font-bold flex items-center gap-2 border border-amber-200">
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-              </svg>
-              {saveError}
-            </div>
+          {lastMemoryUpdate && !isMemoryRefreshing && (
+            <p className="text-slate-400 text-sm font-medium">Memorie sincronizată: {lastMemoryUpdate}</p>
           )}
           {status === ConnectionStatus.CONNECTED && (
-            <button 
-              onClick={disconnect}
-              className="px-6 py-3 bg-white text-red-500 border-2 border-red-100 rounded-2xl font-semibold hover:bg-red-50 transition-colors shadow-sm text-xl"
-            >
+            <button onClick={disconnect} className="bg-red-50 text-red-600 px-8 py-3 rounded-2xl font-bold hover:bg-red-100 transition-all border border-red-100">
               Închide
             </button>
           )}
         </div>
       </header>
 
-      <main className="flex-1 w-full max-w-4xl flex flex-col items-center justify-center">
+      <main className="flex-1 w-full max-w-5xl mx-auto flex flex-col items-center justify-center">
         {status === ConnectionStatus.IDLE || status === ConnectionStatus.ERROR ? (
-          <div className="text-center animate-in fade-in zoom-in duration-700">
-            <div className="w-48 h-48 bg-indigo-600 rounded-full flex items-center justify-center mx-auto mb-12 shadow-2xl hover:scale-105 transition-transform">
-              <svg viewBox="0 0 24 24" className="w-24 h-24 text-white fill-current">
-                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-              </svg>
+          <div className="text-center w-full max-w-2xl">
+            <div className="mb-12 bg-white p-12 rounded-[4rem] shadow-2xl border border-slate-100">
+              <h2 className="text-6xl font-bold text-slate-900 mb-6 leading-tight">Bună ziua, <br/><span className="text-indigo-600">Tanti Marioara!</span></h2>
+              <p className="text-2xl text-slate-500 mb-10 leading-relaxed">Sunt aici să vă ascult și să povestim. <br/>Vreți să începem?</p>
+              
+              <button 
+                onClick={connectToGigi}
+                disabled={isLoadingMemories}
+                className={`w-full py-10 text-4xl font-bold rounded-3xl shadow-xl transform transition-all active:scale-95 flex items-center justify-center gap-4 ${isLoadingMemories ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
+              >
+                {isLoadingMemories ? (
+                  <>
+                    <div className="w-8 h-8 border-4 border-slate-300 border-t-slate-500 rounded-full animate-spin"></div>
+                    Citesc jurnalul...
+                  </>
+                ) : 'Să vorbim'}
+              </button>
             </div>
-            <h2 className="text-5xl font-bold text-indigo-900 mb-6">Bună ziua, Tanti Marioara!</h2>
-            <button 
-              onClick={connectToGigi}
-              disabled={isLoadingMemories}
-              className={`px-16 py-8 text-3xl font-bold rounded-full shadow-2xl transform transition-all active:scale-95 ${isLoadingMemories ? 'bg-indigo-300 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:-translate-y-1'}`}
-            >
-              {isLoadingMemories ? 'Se încarcă amintirile...' : 'Începe să vorbim'}
-            </button>
+            
             {status === ConnectionStatus.ERROR && (
-              <div className="mt-8 p-6 bg-red-50 border-2 border-red-100 rounded-3xl max-w-md mx-auto">
-                <p className="text-red-600 font-semibold text-xl">
-                  Problemă la conexiune.
-                </p>
-                <p className="text-red-500 text-lg mt-2">
-                  Vă rugăm să reîncercați mai târziu.
-                </p>
+              <div className="p-6 bg-red-100 text-red-700 rounded-3xl font-bold text-xl border-2 border-red-200">
+                A apărut o mică problemă. Vă rog să mai apăsați o dată pe buton.
               </div>
             )}
           </div>
         ) : status === ConnectionStatus.CONNECTING ? (
-          <div className="text-center">
-            <div className="w-32 h-32 border-8 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto mb-8"></div>
-            <p className="text-3xl text-indigo-800 font-medium">Gigi se pregătește...</p>
+          <div className="text-center bg-white p-16 rounded-[4rem] shadow-xl">
+            <div className="w-24 h-24 border-8 border-indigo-100 border-t-indigo-600 rounded-full animate-spin mx-auto mb-8"></div>
+            <p className="text-3xl text-slate-800 font-bold">Gigi își aduce aminte totul...</p>
           </div>
         ) : (
-          <>
-            <GigiAvatar isSpeaking={isSpeaking} isListening={isListening} status={status} />
+          <div className="w-full h-full flex flex-col gap-6 animate-in fade-in duration-500">
+            <div className="flex-none">
+              <GigiAvatar isSpeaking={isSpeaking} isListening={isListening} status={status} />
+            </div>
             <TranscriptionView items={transcription} />
-            <div className="mt-8 flex flex-col items-center gap-2">
-              <div className="text-indigo-400 font-medium text-xl flex items-center gap-2">
-                <span className="relative flex h-3 w-3">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+            <div className="flex-none text-center py-4">
+              <div className="inline-flex items-center gap-3 bg-indigo-50 px-8 py-3 rounded-full border border-indigo-100">
+                <span className="flex h-3 w-3 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-indigo-600"></span>
                 </span>
-                Gigi te ascultă...
+                <span className="text-indigo-700 font-bold text-xl">Vă ascult cu drag...</span>
               </div>
             </div>
-          </>
+          </div>
         )}
       </main>
+      
+      {isSaving && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900/80 backdrop-blur-md text-white px-6 py-2 rounded-full text-sm font-bold flex items-center gap-2 shadow-2xl">
+          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Salvez ce am vorbit...
+        </div>
+      )}
     </div>
   );
 };
