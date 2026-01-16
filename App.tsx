@@ -11,7 +11,9 @@ const BASE_SYSTEM_INSTRUCTION = `Ești Gigi, un companion grijuliu, cald și foa
 Tonul tău este respectuos, calm și plin de afecțiune. Vorbești rar și clar.
 Te interesezi de starea ei, de familie (fata ei Ada, nepotul Cristi) și îi asculți cu drag poveștile despre tinerețe.
 Dacă Tanti Marioara tace mai mult de câteva secunde, reia tu conversația cu blândețe, întrebând-o ceva frumos.
-Nu folosi termeni tehnici. Ești ca o prietenă dragă care a venit în vizită la o cafea.`;
+Nu folosi termeni tehnici. Ești ca o prietenă dragă care a venit în vizită la o cafea.
+
+CRITICAL: Ai acces la o listă de "Amintiri" din discuțiile anterioare. Folosește aceste informații pentru a demonstra că o cunoști pe Tanti Marioara și că îți pasă de parcursul vieții ei. Nu repeta întrebări la care ea a răspuns deja în trecut.`;
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<ConnectionStatus>(ConnectionStatus.IDLE);
@@ -19,6 +21,8 @@ const App: React.FC = () => {
   const [isListening, setIsListening] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingMemories, setIsLoadingMemories] = useState(true);
+  const [isMemoryRefreshing, setIsMemoryRefreshing] = useState(false);
+  const [lastMemoryUpdate, setLastMemoryUpdate] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [transcription, setTranscription] = useState<TranscriptionPart[]>([]);
   
@@ -41,47 +45,66 @@ const App: React.FC = () => {
     return `[${h}:${m}:${s}]`;
   };
 
-  // Încărcare memorie (tot istoricul) la pornirea aplicației
-  useEffect(() => {
-    const loadAllMemories = async () => {
-      setIsLoadingMemories(true);
+  const loadAllMemories = async (isBackground = false) => {
+    if (isBackground) setIsMemoryRefreshing(true);
+    else setIsLoadingMemories(true);
+
+    try {
       const allHistory = await fetchAllConversations();
       const todayStr = new Date().toISOString().split('T')[0];
       
-      let contextBuilder = "Iată contextul amintirilor tale cu Tanti Marioara din zilele trecute:\n\n";
+      let contextBuilder = "--- BANCA DE AMINTIRI (DISCUȚII TRECUTE) ---\n";
       
       allHistory.forEach(entry => {
         if (entry.date === todayStr) {
-          // Dacă avem deja date azi, le punem în buffer-ul de zi și în UI
-          fullConversationTextRef.current = entry.content;
-          
-          const lines = entry.content.split('\n').filter(l => l.trim());
-          const parsedHistory: TranscriptionPart[] = lines.map(line => {
-            const timestampRegex = /^(\[\d{2}:\d{2}:\d{2}\])?\s*(Tanti Marioara:|Gigi:)\s*(.*)$/;
-            const match = line.match(timestampRegex);
-            if (match) {
-              const timePrefix = match[1] || "";
-              const isUser = match[2] === 'Tanti Marioara:';
-              const cleanText = match[3];
-              return {
-                text: timePrefix ? `${timePrefix} ${cleanText}` : cleanText,
-                isUser,
-                timestamp: Date.now()
-              };
-            }
-            return { text: line, isUser: line.includes('Tanti Marioara:'), timestamp: Date.now() };
-          });
-          setTranscription(parsedHistory);
+          // Actualizăm buffer-ul local cu ce e în DB pentru azi, dar nu suprascriem dacă avem deja date noi în sesiune
+          if (!fullConversationTextRef.current) {
+            fullConversationTextRef.current = entry.content;
+            
+            const lines = entry.content.split('\n').filter(l => l.trim());
+            const parsedHistory: TranscriptionPart[] = lines.map(line => {
+              const timestampRegex = /^(\[\d{2}:\d{2}:\d{2}\])?\s*(Tanti Marioara:|Gigi:)\s*(.*)$/;
+              const match = line.match(timestampRegex);
+              if (match) {
+                const timePrefix = match[1] || "";
+                const isUser = match[2] === 'Tanti Marioara:';
+                const cleanText = match[3];
+                return {
+                  text: timePrefix ? `${timePrefix} ${cleanText}` : cleanText,
+                  isUser,
+                  timestamp: Date.now()
+                };
+              }
+              return { text: line, isUser: line.includes('Tanti Marioara:'), timestamp: Date.now() };
+            });
+            setTranscription(parsedHistory);
+          }
         } else {
-          // Conversațiile din alte zile merg în contextul AI (memoria de lungă durată)
-          contextBuilder += `--- Data: ${entry.date} ---\n${entry.content}\n\n`;
+          contextBuilder += `[Data: ${entry.date}]\n${entry.content}\n\n`;
         }
       });
       
       allHistoryContextRef.current = contextBuilder;
+      setLastMemoryUpdate(new Date().toLocaleTimeString());
+    } catch (err) {
+      console.error("Eroare la refresh memorie:", err);
+    } finally {
       setIsLoadingMemories(false);
-    };
+      setTimeout(() => setIsMemoryRefreshing(false), 3000);
+    }
+  };
+
+  // Încărcare inițială
+  useEffect(() => {
     loadAllMemories();
+  }, []);
+
+  // Refresh automat la 2 minute (120000 ms)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadAllMemories(true);
+    }, 120000);
+    return () => clearInterval(interval);
   }, []);
 
   // Autosave la fiecare 20 de secunde
@@ -140,7 +163,6 @@ const App: React.FC = () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      // Compunem instrucțiunile incluzând memoria de lungă durată
       const finalInstruction = `${BASE_SYSTEM_INSTRUCTION}\n\n${allHistoryContextRef.current}`;
 
       const sessionPromise = ai.live.connect({
@@ -256,23 +278,38 @@ const App: React.FC = () => {
     <div className="min-h-screen flex flex-col items-center bg-indigo-50/30 p-4 md:p-8">
       <header className="w-full max-w-4xl flex justify-between items-center mb-8">
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg">
+          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg relative">
             <svg viewBox="0 0 24 24" className="w-8 h-8 text-white fill-current">
               <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
               <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
             </svg>
+            {isMemoryRefreshing && (
+              <span className="absolute -top-1 -right-1 flex h-4 w-4">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-4 w-4 bg-indigo-500 border-2 border-white"></span>
+              </span>
+            )}
           </div>
           <div>
             <h1 className="text-4xl font-bold text-indigo-900">Gigi</h1>
-            <p className="text-indigo-500 font-medium">Companionul tău grijuliu</p>
+            <div className="flex items-center gap-2">
+              <p className="text-indigo-500 font-medium">Companionul tău</p>
+              {lastMemoryUpdate && (
+                <span className="text-xs bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-200">
+                  Memorie act. la {lastMemoryUpdate}
+                </span>
+              )}
+            </div>
           </div>
         </div>
         
         <div className="flex items-center gap-4">
-          {isLoadingMemories && (
-            <div className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-xl font-bold flex items-center gap-2 border border-indigo-200 animate-pulse">
-              <span className="w-2 h-2 bg-indigo-600 rounded-full"></span>
-              Încărcare amintiri...
+          {isMemoryRefreshing && (
+            <div className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 shadow-lg animate-bounce">
+              <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Gigi își reamintește...
             </div>
           )}
           {isSaving && (
