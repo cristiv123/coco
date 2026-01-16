@@ -30,20 +30,26 @@ const App: React.FC = () => {
   const transcriptionBufferRef = useRef({ user: '', model: '' });
   
   const fullConversationTextRef = useRef<string>("");
+  const consecutiveSaveErrorsRef = useRef(0);
 
   // Autosave la fiecare 20 de secunde dacă există conținut nou
   useEffect(() => {
     let lastSavedContent = "";
     const timer = setInterval(async () => {
+      // Oprim auto-salvarea dacă avem prea multe erori consecutive de autentificare
+      if (consecutiveSaveErrorsRef.current > 3) return;
+
       const currentContent = fullConversationTextRef.current;
       if (currentContent && currentContent !== lastSavedContent && status === ConnectionStatus.CONNECTED) {
         setIsSaving(true);
-        setSaveError(null);
         try {
           await saveConversation(currentContent);
           lastSavedContent = currentContent;
-        } catch (e) {
-          setSaveError("Eroare salvare");
+          setSaveError(null);
+          consecutiveSaveErrorsRef.current = 0;
+        } catch (e: any) {
+          consecutiveSaveErrorsRef.current++;
+          setSaveError(e.message?.includes('401') ? "Eroare Cheie API" : "Eroare Salvare");
         } finally {
           setTimeout(() => setIsSaving(false), 3000);
         }
@@ -53,8 +59,8 @@ const App: React.FC = () => {
   }, [status]);
 
   const disconnect = useCallback(() => {
-    if (fullConversationTextRef.current) {
-      saveConversation(fullConversationTextRef.current).catch(console.error);
+    if (fullConversationTextRef.current && consecutiveSaveErrorsRef.current <= 3) {
+      saveConversation(fullConversationTextRef.current).catch(() => {});
     }
 
     if (sessionRef.current) {
@@ -79,7 +85,7 @@ const App: React.FC = () => {
       
       const apiKey = process.env.API_KEY;
       if (!apiKey) {
-        throw new Error("API_KEY lipsește din mediu.");
+        throw new Error("API_KEY lipsește.");
       }
 
       const ai = new GoogleGenAI({ apiKey });
@@ -175,7 +181,7 @@ const App: React.FC = () => {
             }
           },
           onerror: (e) => {
-            console.error('Gigi connection error:', e);
+            console.error('Gigi error:', e);
             setStatus(ConnectionStatus.ERROR);
           },
           onclose: () => {
@@ -216,9 +222,12 @@ const App: React.FC = () => {
             </div>
           )}
           {saveError && (
-            <span className="text-red-500 font-bold text-lg animate-bounce">
+            <div className="bg-red-100 text-red-600 px-4 py-2 rounded-xl font-bold flex items-center gap-2">
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
               {saveError}
-            </span>
+            </div>
           )}
           {status === ConnectionStatus.CONNECTED && (
             <button 
@@ -250,10 +259,10 @@ const App: React.FC = () => {
             {status === ConnectionStatus.ERROR && (
               <div className="mt-8 p-6 bg-red-50 border-2 border-red-100 rounded-3xl max-w-md mx-auto">
                 <p className="text-red-600 font-semibold text-xl">
-                  A apărut o problemă la conexiune.
+                  Problemă la conexiune.
                 </p>
                 <p className="text-red-500 text-lg mt-2">
-                  Verifică dacă ai setat API_KEY, SUPABASE_URL și SUPABASE_ANON_KEY în Vercel.
+                  Asigură-te că variabilele de mediu sunt setate corect în Vercel.
                 </p>
               </div>
             )}
@@ -273,7 +282,7 @@ const App: React.FC = () => {
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
                 </span>
-                Conversația este protejată și salvată automat
+                Conversație salvată în siguranță
               </div>
             </div>
           </>

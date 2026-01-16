@@ -1,25 +1,28 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// Coordonate furnizate pentru integrarea completă
-const supabaseUrl = 'https://tnttlfbrzndbjjrvdgbf.supabase.co';
-const supabaseAnonKey = 'sb_publishable_Kxk_efqx1-foSZ_yMorH7A_6XNSnAvp';
+// Prioritizăm variabilele de mediu din Vercel (SUPABASE_URL și SUPABASE_ANON_KEY)
+// Cheia "sb_publishable_..." furnizată anterior pare a fi de la un alt serviciu (ex: Stripe/Clerk).
+// Supabase Anon Keys încep de obicei cu "eyJ..."
+const supabaseUrl = process.env.SUPABASE_URL || 'https://tnttlfbrzndbjjrvdgbf.supabase.co';
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || ''; 
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 /**
  * Salvează sau actualizează conversația zilei curente.
- * Tabela 'daily_conversations' trebuie să aibă coloana 'conversation_date' setată ca UNIQUE.
  */
 export async function saveConversation(content: string) {
   if (!content) return;
+  if (!supabaseAnonKey) {
+    console.error("Supabase Anon Key lipsește. Verifică variabilele de mediu în Vercel.");
+    return;
+  }
 
   const today = new Date().toISOString().split('T')[0];
 
   try {
-    console.log(`Gigi încearcă să salveze amintirile pentru data: ${today}...`);
-    
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('daily_conversations')
       .upsert(
         { 
@@ -28,18 +31,22 @@ export async function saveConversation(content: string) {
           updated_at: new Date().toISOString()
         }, 
         { onConflict: 'conversation_date' }
-      )
-      .select();
+      );
 
     if (error) {
-      console.error('Eroare la salvarea în Supabase:', error.message);
-      // Notă: Dacă primești eroare 404 sau "relation not found", 
-      // asigură-te că ai creat tabela daily_conversations în dashboard-ul Supabase.
+      if (error.code === '401' || error.message.includes('Unauthorized')) {
+        console.error('Eroare Autentificare Supabase (401): Cheia ANON este incorectă sau expirată.');
+      } else if (error.code === 'PGRST116' || error.message.includes('not found')) {
+        console.error('Eroare: Tabela "daily_conversations" nu a fost găsită. Creează tabela în SQL Editor din Supabase.');
+      } else {
+        console.error('Eroare Supabase:', error.message);
+      }
       throw error;
     }
     
-    console.log('Conversație salvată cu succes.');
+    console.log('Amintiri salvate cu succes.');
   } catch (err) {
-    console.error('Eroare critică la serviciul de salvare:', err);
+    console.error('Eroare la procesul de salvare:', err);
+    throw err; // Aruncăm eroarea mai departe pentru ca UI-ul să o poată afișa
   }
 }
