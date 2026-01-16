@@ -35,7 +35,6 @@ const App: React.FC = () => {
   useEffect(() => {
     let lastSavedContent = "";
     const timer = setInterval(async () => {
-      // Dacă s-a confirmat că cheia e invalidă, nu mai încercăm
       if ((window as any).SUPABASE_DISABLED) return;
 
       const currentContent = fullConversationTextRef.current;
@@ -84,12 +83,14 @@ const App: React.FC = () => {
     try {
       setStatus(ConnectionStatus.CONNECTING);
       
+      // Obtain API key exclusively from process.env.API_KEY as per guidelines
       const apiKey = process.env.API_KEY;
       if (!apiKey) {
         throw new Error("API_KEY lipsește.");
       }
 
-      const ai = new GoogleGenAI({ apiKey });
+      // Initialize GoogleGenAI right before making the API call
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
       audioContextInRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       audioContextOutRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -100,6 +101,7 @@ const App: React.FC = () => {
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
+          // Fixed typo: responseModalities instead of responseModalalities
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
@@ -119,6 +121,7 @@ const App: React.FC = () => {
             scriptProcessor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
               const pcmBlob = createPcmBlob(inputData);
+              // Ensure data is sent only after session resolves
               sessionPromise.then(session => {
                 if (session) session.sendRealtimeInput({ media: pcmBlob });
               });
@@ -263,7 +266,7 @@ const App: React.FC = () => {
                   Problemă la conexiune.
                 </p>
                 <p className="text-red-500 text-lg mt-2">
-                  Asigură-te că variabilele de mediu sunt setate corect în Vercel.
+                  Asigură-te că API_KEY este configurată corect în variabilele de mediu.
                 </p>
               </div>
             )}

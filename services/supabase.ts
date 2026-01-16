@@ -1,8 +1,12 @@
+
 import { createClient } from '@supabase/supabase-js';
 
-// Pentru Vite/client-side, folosește import.meta.env cu prefix VITE_
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+/**
+ * NOTĂ: Folosim process.env pentru a accesa variabilele setate în Vercel/Vite.
+ * Utilizăm prefixul VITE_ conform cerințelor mediului de execuție.
+ */
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 
 // Verificăm dacă avem ambele valori necesare și dacă cheia are formatul JWT (începe cu eyJ)
 const isConfigured = !!supabaseUrl && !!supabaseAnonKey && supabaseAnonKey.startsWith('eyJ');
@@ -18,12 +22,7 @@ export async function saveConversation(content: string) {
   if (!content) return;
   
   if (!supabase) {
-    // Mesaj de diagnosticare dacă configurarea lipsește
-    if (!supabaseUrl || !supabaseAnonKey) {
-      console.warn("⚠️ SUPABASE: Variabilele VITE_SUPABASE_URL sau VITE_SUPABASE_ANON_KEY lipsesc din Environment Variables.");
-    } else if (!supabaseAnonKey.startsWith('eyJ')) {
-      console.warn("⚠️ SUPABASE: Cheia anon furnizată nu are formatul corect (trebuie să înceapă cu 'eyJ').");
-    }
+    console.warn("⚠️ SUPABASE: Configurare incompletă. Verifică variabilele VITE_SUPABASE_URL și VITE_SUPABASE_ANON_KEY.");
     return;
   }
 
@@ -43,17 +42,14 @@ export async function saveConversation(content: string) {
 
     if (error) {
       if (error.code === '401' || error.message.includes('Invalid API key')) {
-        console.error('❌ Supabase 401: Cheia este invalidă sau proiectul a fost suspendat.');
+        console.error('❌ Supabase 401: Cheia este invalidă.');
         (window as any).SUPABASE_DISABLED = true;
-      } else {
-        console.error('❌ Eroare Supabase:', error.message);
       }
       throw error;
     }
     
-    console.log('✅ Conversația a fost salvată în baza de date.');
+    console.log('✅ Conversația a fost salvată cu succes.');
   } catch (err) {
-    // Nu blocăm interfața dacă salvarea eșuează
     console.error('Eroare la salvarea în DB:', err);
   }
 }
