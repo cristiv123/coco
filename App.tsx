@@ -3,7 +3,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from '@google/genai';
 import { ConnectionStatus, TranscriptionPart } from './types';
 import { decode, decodeAudioData, createPcmBlob } from './services/audioUtils';
-import { saveConversation } from './services/supabase';
+import { fetchTodayConversation, saveConversation } from './services/supabase';
 import GigiAvatar from './components/GigiAvatar';
 import TranscriptionView from './components/TranscriptionView';
 
@@ -31,25 +31,45 @@ const App: React.FC = () => {
   
   const fullConversationTextRef = useRef<string>("");
 
+  // Încărcare istoric la pornire
+  useEffect(() => {
+    const loadHistory = async () => {
+      const history = await fetchTodayConversation();
+      if (history) {
+        fullConversationTextRef.current = history;
+        
+        // Parsăm textul pentru a reconstrui interfața (Tanti Marioara: ... / Gigi: ...)
+        const lines = history.split('\n').filter(l => l.trim());
+        const parsedHistory: TranscriptionPart[] = lines.map(line => {
+          const isUser = line.startsWith('Tanti Marioara:');
+          const cleanText = line.replace(/^(Tanti Marioara:|Gigi:)\s*/, '');
+          return {
+            text: cleanText,
+            isUser,
+            timestamp: Date.now()
+          };
+        });
+        setTranscription(parsedHistory);
+      }
+    };
+    loadHistory();
+  }, []);
+
   // Autosave la fiecare 20 de secunde
   useEffect(() => {
-    let lastSavedContent = "";
+    let lastSavedContent = fullConversationTextRef.current;
     const timer = setInterval(async () => {
       if ((window as any).SUPABASE_DISABLED) return;
 
       const currentContent = fullConversationTextRef.current;
-      if (currentContent && currentContent !== lastSavedContent && status === ConnectionStatus.CONNECTED) {
+      if (currentContent && currentContent !== lastSavedContent && (status === ConnectionStatus.CONNECTED || status === ConnectionStatus.IDLE)) {
         setIsSaving(true);
         try {
           await saveConversation(currentContent);
           lastSavedContent = currentContent;
           setSaveError(null);
         } catch (e: any) {
-          if (e.message?.includes('401') || e.message?.includes('API key')) {
-            setSaveError("Cheie API Invalidă");
-          } else {
-            setSaveError("Eroare Conexiune DB");
-          }
+          setSaveError("Eroare Sincronizare");
         } finally {
           setTimeout(() => setIsSaving(false), 2000);
         }
@@ -83,7 +103,6 @@ const App: React.FC = () => {
     try {
       setStatus(ConnectionStatus.CONNECTING);
       
-      // Initialize GoogleGenAI directly with process.env.API_KEY as per guidelines
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
       audioContextInRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -114,7 +133,6 @@ const App: React.FC = () => {
             scriptProcessor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
               const pcmBlob = createPcmBlob(inputData);
-              // Solely rely on sessionPromise resolves without extra condition checks
               sessionPromise.then(session => {
                 session.sendRealtimeInput({ media: pcmBlob });
               });
@@ -215,7 +233,7 @@ const App: React.FC = () => {
           {isSaving && (
             <div className="flex items-center gap-2 text-indigo-600 font-medium animate-pulse">
               <div className="w-2 h-2 bg-indigo-600 rounded-full"></div>
-              <span className="text-lg">Salvare...</span>
+              <span className="text-lg">Sincronizare...</span>
             </div>
           )}
           {saveError && (
