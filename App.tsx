@@ -1,8 +1,9 @@
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from '@google/genai';
 import { ConnectionStatus, TranscriptionPart } from './types';
 import { decode, decodeAudioData, createPcmBlob } from './services/audioUtils';
+import { saveConversation } from './services/supabase';
 import GigiAvatar from './components/GigiAvatar';
 import TranscriptionView from './components/TranscriptionView';
 
@@ -16,6 +17,8 @@ const App: React.FC = () => {
   const [status, setStatus] = useState<ConnectionStatus>(ConnectionStatus.IDLE);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [transcription, setTranscription] = useState<TranscriptionPart[]>([]);
   
   const audioContextInRef = useRef<AudioContext | null>(null);
@@ -25,8 +28,35 @@ const App: React.FC = () => {
   const sessionRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const transcriptionBufferRef = useRef({ user: '', model: '' });
+  
+  const fullConversationTextRef = useRef<string>("");
+
+  // Autosave la fiecare 20 de secunde dacă există conținut nou
+  useEffect(() => {
+    let lastSavedContent = "";
+    const timer = setInterval(async () => {
+      const currentContent = fullConversationTextRef.current;
+      if (currentContent && currentContent !== lastSavedContent && status === ConnectionStatus.CONNECTED) {
+        setIsSaving(true);
+        setSaveError(null);
+        try {
+          await saveConversation(currentContent);
+          lastSavedContent = currentContent;
+        } catch (e) {
+          setSaveError("Eroare salvare");
+        } finally {
+          setTimeout(() => setIsSaving(false), 3000);
+        }
+      }
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [status]);
 
   const disconnect = useCallback(() => {
+    if (fullConversationTextRef.current) {
+      saveConversation(fullConversationTextRef.current).catch(console.error);
+    }
+
     if (sessionRef.current) {
       sessionRef.current.close();
       sessionRef.current = null;
@@ -47,10 +77,9 @@ const App: React.FC = () => {
     try {
       setStatus(ConnectionStatus.CONNECTING);
       
-      // Verificăm dacă cheia există înainte de inițializare
       const apiKey = process.env.API_KEY;
       if (!apiKey) {
-        throw new Error("Cheia API lipsește. Asigură-te că variabila se numește exact API_KEY în Vercel.");
+        throw new Error("API_KEY lipsește din mediu.");
       }
 
       const ai = new GoogleGenAI({ apiKey });
@@ -103,6 +132,9 @@ const App: React.FC = () => {
               const uText = transcriptionBufferRef.current.user.trim();
               const mText = transcriptionBufferRef.current.model.trim();
               
+              if (uText) fullConversationTextRef.current += `Tanti Marioara: ${uText}\n`;
+              if (mText) fullConversationTextRef.current += `Gigi: ${mText}\n`;
+
               setTranscription(prev => [
                 ...prev,
                 ...(uText ? [{ text: uText, isUser: true, timestamp: Date.now() }] : []),
@@ -143,7 +175,7 @@ const App: React.FC = () => {
             }
           },
           onerror: (e) => {
-            console.error('Gigi error:', e);
+            console.error('Gigi connection error:', e);
             setStatus(ConnectionStatus.ERROR);
           },
           onclose: () => {
@@ -155,7 +187,7 @@ const App: React.FC = () => {
       sessionRef.current = await sessionPromise;
       
     } catch (err) {
-      console.error('Failed to connect:', err);
+      console.error('Setup failure:', err);
       setStatus(ConnectionStatus.ERROR);
     }
   };
@@ -163,18 +195,40 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col items-center bg-indigo-50/30 p-4 md:p-8">
       <header className="w-full max-w-4xl flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-4xl font-bold text-indigo-900">Gigi</h1>
-          <p className="text-indigo-500 font-medium">Companionul tău grijuliu</p>
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg">
+            <svg viewBox="0 0 24 24" className="w-8 h-8 text-white fill-current">
+              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+              <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+            </svg>
+          </div>
+          <div>
+            <h1 className="text-4xl font-bold text-indigo-900">Gigi</h1>
+            <p className="text-indigo-500 font-medium">Companionul tău grijuliu</p>
+          </div>
         </div>
-        {status === ConnectionStatus.CONNECTED && (
-          <button 
-            onClick={disconnect}
-            className="px-6 py-3 bg-white text-red-500 border-2 border-red-100 rounded-2xl font-semibold hover:bg-red-50 transition-colors shadow-sm"
-          >
-            Închide
-          </button>
-        )}
+        
+        <div className="flex items-center gap-4">
+          {isSaving && (
+            <div className="flex items-center gap-2 text-indigo-600 font-medium animate-pulse">
+              <div className="w-2 h-2 bg-indigo-600 rounded-full"></div>
+              <span className="text-lg">Salvare...</span>
+            </div>
+          )}
+          {saveError && (
+            <span className="text-red-500 font-bold text-lg animate-bounce">
+              {saveError}
+            </span>
+          )}
+          {status === ConnectionStatus.CONNECTED && (
+            <button 
+              onClick={disconnect}
+              className="px-6 py-3 bg-white text-red-500 border-2 border-red-100 rounded-2xl font-semibold hover:bg-red-50 transition-colors shadow-sm text-xl"
+            >
+              Închide
+            </button>
+          )}
+        </div>
       </header>
 
       <main className="flex-1 w-full max-w-4xl flex flex-col items-center justify-center">
@@ -194,9 +248,14 @@ const App: React.FC = () => {
               Începe să vorbim
             </button>
             {status === ConnectionStatus.ERROR && (
-              <p className="mt-6 text-red-500 font-semibold text-xl">
-                A apărut o eroare. Verifică setările API_KEY în Vercel.
-              </p>
+              <div className="mt-8 p-6 bg-red-50 border-2 border-red-100 rounded-3xl max-w-md mx-auto">
+                <p className="text-red-600 font-semibold text-xl">
+                  A apărut o problemă la conexiune.
+                </p>
+                <p className="text-red-500 text-lg mt-2">
+                  Verifică dacă ai setat API_KEY, SUPABASE_URL și SUPABASE_ANON_KEY în Vercel.
+                </p>
+              </div>
             )}
           </div>
         ) : status === ConnectionStatus.CONNECTING ? (
@@ -208,12 +267,14 @@ const App: React.FC = () => {
           <>
             <GigiAvatar isSpeaking={isSpeaking} isListening={isListening} status={status} />
             <TranscriptionView items={transcription} />
-            <div className="mt-8 text-indigo-400 font-medium text-xl flex items-center gap-2">
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-              </span>
-              Conexiune securizată
+            <div className="mt-8 flex flex-col items-center gap-2">
+              <div className="text-indigo-400 font-medium text-xl flex items-center gap-2">
+                <span className="relative flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                </span>
+                Conversația este protejată și salvată automat
+              </div>
             </div>
           </>
         )}
