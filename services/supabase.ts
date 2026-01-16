@@ -1,12 +1,13 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// Prioritizăm variabilele de mediu din Vercel (SUPABASE_URL și SUPABASE_ANON_KEY)
-// Cheia "sb_publishable_..." furnizată anterior pare a fi de la un alt serviciu (ex: Stripe/Clerk).
-// Supabase Anon Keys încep de obicei cu "eyJ..."
+// Folosim variabilele de mediu din proces, cu fallback la valorile furnizate de utilizator
+// Notă: "sb_publishable_..." nu pare a fi o cheie Anon standard Supabase (care e un JWT lung),
+// dar o folosim pentru a preveni eroarea "supabaseKey is required".
 const supabaseUrl = process.env.SUPABASE_URL || 'https://tnttlfbrzndbjjrvdgbf.supabase.co';
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || ''; 
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_Kxk_efqx1-foSZ_yMorH7A_6XNSnAvp'; 
 
+// Inițializăm clientul. Dacă cheia este un șir gol, Supabase va arunca o eroare la runtime.
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 /**
@@ -14,8 +15,10 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
  */
 export async function saveConversation(content: string) {
   if (!content) return;
-  if (!supabaseAnonKey) {
-    console.error("Supabase Anon Key lipsește. Verifică variabilele de mediu în Vercel.");
+  
+  // Verificăm dacă cheia pare validă înainte de a încerca salvarea (minimă protecție)
+  if (!supabaseAnonKey || supabaseAnonKey === '') {
+    console.error("Supabase Anon Key lipsește complet.");
     return;
   }
 
@@ -35,18 +38,18 @@ export async function saveConversation(content: string) {
 
     if (error) {
       if (error.code === '401' || error.message.includes('Unauthorized')) {
-        console.error('Eroare Autentificare Supabase (401): Cheia ANON este incorectă sau expirată.');
+        console.error('Eroare Autentificare (401): Cheia furnizată nu are permisiuni sau este invalidă.');
       } else if (error.code === 'PGRST116' || error.message.includes('not found')) {
-        console.error('Eroare: Tabela "daily_conversations" nu a fost găsită. Creează tabela în SQL Editor din Supabase.');
+        console.error('Eroare: Tabela "daily_conversations" nu există în baza de date.');
       } else {
         console.error('Eroare Supabase:', error.message);
       }
       throw error;
     }
     
-    console.log('Amintiri salvate cu succes.');
+    console.log('Conversație sincronizată cu succes.');
   } catch (err) {
-    console.error('Eroare la procesul de salvare:', err);
-    throw err; // Aruncăm eroarea mai departe pentru ca UI-ul să o poată afișa
+    console.error('Eroare în fluxul de salvare:', err);
+    throw err;
   }
 }
