@@ -31,6 +31,14 @@ const App: React.FC = () => {
   
   const fullConversationTextRef = useRef<string>("");
 
+  const getTimestamp = () => {
+    const now = new Date();
+    const h = now.getHours().toString().padStart(2, '0');
+    const m = now.getMinutes().toString().padStart(2, '0');
+    const s = now.getSeconds().toString().padStart(2, '0');
+    return `[${h}:${m}:${s}]`;
+  };
+
   // Încărcare istoric la pornire
   useEffect(() => {
     const loadHistory = async () => {
@@ -38,14 +46,27 @@ const App: React.FC = () => {
       if (history) {
         fullConversationTextRef.current = history;
         
-        // Parsăm textul pentru a reconstrui interfața (Tanti Marioara: ... / Gigi: ...)
         const lines = history.split('\n').filter(l => l.trim());
         const parsedHistory: TranscriptionPart[] = lines.map(line => {
-          const isUser = line.startsWith('Tanti Marioara:');
-          const cleanText = line.replace(/^(Tanti Marioara:|Gigi:)\s*/, '');
+          // Regex care suportă formatul cu sau fără timestamp: [HH:mm:ss] Nume: Text
+          const timestampRegex = /^(\[\d{2}:\d{2}:\d{2}\])?\s*(Tanti Marioara:|Gigi:)\s*(.*)$/;
+          const match = line.match(timestampRegex);
+          
+          if (match) {
+            const timePrefix = match[1] || "";
+            const isUser = match[2] === 'Tanti Marioara:';
+            const cleanText = match[3];
+            return {
+              text: timePrefix ? `${timePrefix} ${cleanText}` : cleanText,
+              isUser,
+              timestamp: Date.now()
+            };
+          }
+          
+          // Fallback pentru linii neformate corect
           return {
-            text: cleanText,
-            isUser,
+            text: line,
+            isUser: line.includes('Tanti Marioara:'),
             timestamp: Date.now()
           };
         });
@@ -152,15 +173,22 @@ const App: React.FC = () => {
             if (message.serverContent?.turnComplete) {
               const uText = transcriptionBufferRef.current.user.trim();
               const mText = transcriptionBufferRef.current.model.trim();
+              const timeStr = getTimestamp();
               
-              if (uText) fullConversationTextRef.current += `Tanti Marioara: ${uText}\n`;
-              if (mText) fullConversationTextRef.current += `Gigi: ${mText}\n`;
+              const newEntries: TranscriptionPart[] = [];
 
-              setTranscription(prev => [
-                ...prev,
-                ...(uText ? [{ text: uText, isUser: true, timestamp: Date.now() }] : []),
-                ...(mText ? [{ text: mText, isUser: false, timestamp: Date.now() }] : [])
-              ]);
+              if (uText) {
+                fullConversationTextRef.current += `${timeStr} Tanti Marioara: ${uText}\n`;
+                newEntries.push({ text: `${timeStr} ${uText}`, isUser: true, timestamp: Date.now() });
+              }
+              if (mText) {
+                fullConversationTextRef.current += `${timeStr} Gigi: ${mText}\n`;
+                newEntries.push({ text: `${timeStr} ${mText}`, isUser: false, timestamp: Date.now() });
+              }
+
+              if (newEntries.length > 0) {
+                setTranscription(prev => [...prev, ...newEntries]);
+              }
               
               transcriptionBufferRef.current = { user: '', model: '' };
             }
