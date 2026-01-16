@@ -1,9 +1,8 @@
-
 import { createClient } from '@supabase/supabase-js';
 
-// Citim variabilele direct din proces. În Vercel, acestea sunt injectate automat.
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
+// Pentru Vite/client-side, folosește import.meta.env cu prefix VITE_
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // Verificăm dacă avem ambele valori necesare și dacă cheia are formatul JWT (începe cu eyJ)
 const isConfigured = !!supabaseUrl && !!supabaseAnonKey && supabaseAnonKey.startsWith('eyJ');
@@ -21,7 +20,7 @@ export async function saveConversation(content: string) {
   if (!supabase) {
     // Mesaj de diagnosticare dacă configurarea lipsește
     if (!supabaseUrl || !supabaseAnonKey) {
-      console.warn("⚠️ SUPABASE: Variabilele SUPABASE_URL sau SUPABASE_ANON_KEY lipsesc din Environment Variables.");
+      console.warn("⚠️ SUPABASE: Variabilele VITE_SUPABASE_URL sau VITE_SUPABASE_ANON_KEY lipsesc din Environment Variables.");
     } else if (!supabaseAnonKey.startsWith('eyJ')) {
       console.warn("⚠️ SUPABASE: Cheia anon furnizată nu are formatul corect (trebuie să înceapă cu 'eyJ').");
     }
