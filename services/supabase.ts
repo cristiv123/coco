@@ -28,6 +28,26 @@ export const supabase = isConfigured
   : null;
 
 /**
+ * Recuperează TOATE conversațiile salvate, ordonate cronologic.
+ */
+export async function fetchAllConversations(): Promise<{date: string, content: string}[]> {
+  if (!supabase) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from('daily_conversations')
+      .select('conversation_date, content')
+      .order('conversation_date', { ascending: true });
+
+    if (error) throw error;
+    return data?.map(d => ({ date: d.conversation_date, content: d.content })) || [];
+  } catch (err) {
+    console.error('Eroare la recuperarea istoricului complet:', err);
+    return [];
+  }
+}
+
+/**
  * Recuperează conversația salvată pentru ziua curentă.
  */
 export async function fetchTodayConversation(): Promise<string | null> {
@@ -45,7 +65,7 @@ export async function fetchTodayConversation(): Promise<string | null> {
     if (error) throw error;
     return data?.content || null;
   } catch (err) {
-    console.error('Eroare la recuperarea conversației:', err);
+    console.error('Eroare la recuperarea conversației de azi:', err);
     return null;
   }
 }

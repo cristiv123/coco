@@ -3,11 +3,11 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from '@google/genai';
 import { ConnectionStatus, TranscriptionPart } from './types';
 import { decode, decodeAudioData, createPcmBlob } from './services/audioUtils';
-import { fetchTodayConversation, saveConversation } from './services/supabase';
+import { fetchAllConversations, saveConversation } from './services/supabase';
 import GigiAvatar from './components/GigiAvatar';
 import TranscriptionView from './components/TranscriptionView';
 
-const SYSTEM_INSTRUCTION = `Ești Gigi, un companion grijuliu, cald și foarte răbdător pentru o doamnă în vârstă pe nume Tanti Marioara. 
+const BASE_SYSTEM_INSTRUCTION = `Ești Gigi, un companion grijuliu, cald și foarte răbdător pentru o doamnă în vârstă pe nume Tanti Marioara. 
 Tonul tău este respectuos, calm și plin de afecțiune. Vorbești rar și clar.
 Te interesezi de starea ei, de familie (fata ei Ada, nepotul Cristi) și îi asculți cu drag poveștile despre tinerețe.
 Dacă Tanti Marioara tace mai mult de câteva secunde, reia tu conversația cu blândețe, întrebând-o ceva frumos.
@@ -18,6 +18,7 @@ const App: React.FC = () => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingMemories, setIsLoadingMemories] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [transcription, setTranscription] = useState<TranscriptionPart[]>([]);
   
@@ -30,6 +31,7 @@ const App: React.FC = () => {
   const transcriptionBufferRef = useRef({ user: '', model: '' });
   
   const fullConversationTextRef = useRef<string>("");
+  const allHistoryContextRef = useRef<string>("");
 
   const getTimestamp = () => {
     const now = new Date();
@@ -39,41 +41,47 @@ const App: React.FC = () => {
     return `[${h}:${m}:${s}]`;
   };
 
-  // Încărcare istoric la pornire
+  // Încărcare memorie (tot istoricul) la pornirea aplicației
   useEffect(() => {
-    const loadHistory = async () => {
-      const history = await fetchTodayConversation();
-      if (history) {
-        fullConversationTextRef.current = history;
-        
-        const lines = history.split('\n').filter(l => l.trim());
-        const parsedHistory: TranscriptionPart[] = lines.map(line => {
-          // Regex care suportă formatul cu sau fără timestamp: [HH:mm:ss] Nume: Text
-          const timestampRegex = /^(\[\d{2}:\d{2}:\d{2}\])?\s*(Tanti Marioara:|Gigi:)\s*(.*)$/;
-          const match = line.match(timestampRegex);
+    const loadAllMemories = async () => {
+      setIsLoadingMemories(true);
+      const allHistory = await fetchAllConversations();
+      const todayStr = new Date().toISOString().split('T')[0];
+      
+      let contextBuilder = "Iată contextul amintirilor tale cu Tanti Marioara din zilele trecute:\n\n";
+      
+      allHistory.forEach(entry => {
+        if (entry.date === todayStr) {
+          // Dacă avem deja date azi, le punem în buffer-ul de zi și în UI
+          fullConversationTextRef.current = entry.content;
           
-          if (match) {
-            const timePrefix = match[1] || "";
-            const isUser = match[2] === 'Tanti Marioara:';
-            const cleanText = match[3];
-            return {
-              text: timePrefix ? `${timePrefix} ${cleanText}` : cleanText,
-              isUser,
-              timestamp: Date.now()
-            };
-          }
-          
-          // Fallback pentru linii neformate corect
-          return {
-            text: line,
-            isUser: line.includes('Tanti Marioara:'),
-            timestamp: Date.now()
-          };
-        });
-        setTranscription(parsedHistory);
-      }
+          const lines = entry.content.split('\n').filter(l => l.trim());
+          const parsedHistory: TranscriptionPart[] = lines.map(line => {
+            const timestampRegex = /^(\[\d{2}:\d{2}:\d{2}\])?\s*(Tanti Marioara:|Gigi:)\s*(.*)$/;
+            const match = line.match(timestampRegex);
+            if (match) {
+              const timePrefix = match[1] || "";
+              const isUser = match[2] === 'Tanti Marioara:';
+              const cleanText = match[3];
+              return {
+                text: timePrefix ? `${timePrefix} ${cleanText}` : cleanText,
+                isUser,
+                timestamp: Date.now()
+              };
+            }
+            return { text: line, isUser: line.includes('Tanti Marioara:'), timestamp: Date.now() };
+          });
+          setTranscription(parsedHistory);
+        } else {
+          // Conversațiile din alte zile merg în contextul AI (memoria de lungă durată)
+          contextBuilder += `--- Data: ${entry.date} ---\n${entry.content}\n\n`;
+        }
+      });
+      
+      allHistoryContextRef.current = contextBuilder;
+      setIsLoadingMemories(false);
     };
-    loadHistory();
+    loadAllMemories();
   }, []);
 
   // Autosave la fiecare 20 de secunde
@@ -132,6 +140,9 @@ const App: React.FC = () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
+      // Compunem instrucțiunile incluzând memoria de lungă durată
+      const finalInstruction = `${BASE_SYSTEM_INSTRUCTION}\n\n${allHistoryContextRef.current}`;
+
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
@@ -139,7 +150,7 @@ const App: React.FC = () => {
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
           },
-          systemInstruction: SYSTEM_INSTRUCTION,
+          systemInstruction: finalInstruction,
           inputAudioTranscription: {},
           outputAudioTranscription: {},
         },
@@ -258,6 +269,12 @@ const App: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-4">
+          {isLoadingMemories && (
+            <div className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-xl font-bold flex items-center gap-2 border border-indigo-200 animate-pulse">
+              <span className="w-2 h-2 bg-indigo-600 rounded-full"></span>
+              Încărcare amintiri...
+            </div>
+          )}
           {isSaving && (
             <div className="flex items-center gap-2 text-indigo-600 font-medium animate-pulse">
               <div className="w-2 h-2 bg-indigo-600 rounded-full"></div>
@@ -295,9 +312,10 @@ const App: React.FC = () => {
             <h2 className="text-5xl font-bold text-indigo-900 mb-6">Bună ziua, Tanti Marioara!</h2>
             <button 
               onClick={connectToGigi}
-              className="px-16 py-8 bg-indigo-600 text-white text-3xl font-bold rounded-full shadow-2xl hover:bg-indigo-700 transform hover:-translate-y-1 transition-all active:scale-95"
+              disabled={isLoadingMemories}
+              className={`px-16 py-8 text-3xl font-bold rounded-full shadow-2xl transform transition-all active:scale-95 ${isLoadingMemories ? 'bg-indigo-300 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:-translate-y-1'}`}
             >
-              Începe să vorbim
+              {isLoadingMemories ? 'Se încarcă amintirile...' : 'Începe să vorbim'}
             </button>
             {status === ConnectionStatus.ERROR && (
               <div className="mt-8 p-6 bg-red-50 border-2 border-red-100 rounded-3xl max-w-md mx-auto">
