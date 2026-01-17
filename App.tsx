@@ -39,7 +39,13 @@ const App: React.FC = () => {
 
   const getTimestamp = () => {
     const now = new Date();
-    return `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}]`;
+    const year = now.getFullYear();
+    const month = (now.getMonth() + 1).toString().padStart(2, '0');
+    const day = now.getDate().toString().padStart(2, '0');
+    const hours = now.getHours().toString().padStart(2, '0');
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    const seconds = now.getSeconds().toString().padStart(2, '0');
+    return `[${year}-${month}-${day} ${hours}:${minutes}:${seconds}]`;
   };
 
   const syncMemories = async (isBackground = false) => {
@@ -62,7 +68,8 @@ const App: React.FC = () => {
         if (!isBackground && entry.date === todayStr && !fullConversationTextRef.current) {
           fullConversationTextRef.current = entry.content;
           const parsed = entry.content.split('\n').filter(l => l.trim()).map(line => ({
-            text: line.replace(/^\[\d{2}:\d{2}\]\s*(Tanti Marioara:|Gigi:)\s*/, ''),
+            // Regex-ul acum elimină orice timestamp între paranteze pătrate la începutul liniei
+            text: line.replace(/^\[[^\]]*\]\s*(Tanti Marioara:|Gigi:)\s*/, ''),
             isUser: line.includes('Tanti Marioara:'),
             timestamp: Date.now()
           }));
@@ -131,12 +138,10 @@ const App: React.FC = () => {
       setStatus(ConnectionStatus.CONNECTING);
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
-      // Inițializare AudioContext (folosim ambele prefixe pentru compatibilitate maximă mobilă)
       const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
       audioContextInRef.current = new AudioCtx({ sampleRate: 16000 });
       audioContextOutRef.current = new AudioCtx({ sampleRate: 24000 });
       
-      // CRITICAL PENTRU MOBIL: Reluarea contextului în urma unei acțiuni de tip click
       await audioContextInRef.current!.resume();
       await audioContextOutRef.current!.resume();
       
@@ -188,7 +193,6 @@ const App: React.FC = () => {
             if (audio && audioContextOutRef.current) {
               setIsSpeaking(true);
               const ctx = audioContextOutRef.current;
-              // Asigură-te că AudioContext-ul este încă activ
               if (ctx.state === 'suspended') await ctx.resume();
               
               nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
